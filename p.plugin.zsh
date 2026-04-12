@@ -12,9 +12,9 @@ __p_help() {
   echo
   echo "  open             Open project in tmux session (sets \$PSESSION=1)"
   echo "    <name>         Project name to open"
-  echo "    -r, --re, --restore  Reopen missing windows in existing session"
   echo
   echo "  re|restore       cd to dir matching current tmux session.window"
+  echo "    -a, --all      Reopen missing windows in existing session"
   echo
   echo "  list             List all projects"
   echo
@@ -106,15 +106,10 @@ __p_open() {
     return 1
   fi
 
-  local restore=0
   local name=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -r|--re|--restore)
-        restore=1
-        shift
-        ;;
       -*)
         echo "Unknown option: $1" >&2
         return 1
@@ -137,17 +132,6 @@ __p_open() {
   fi
 
   if tmux has-session -t "=$name" 2>/dev/null; then
-    if [[ "$restore" -eq 1 ]]; then
-      local -a existing_windows
-      existing_windows=("${(@f)$(tmux list-windows -t "=$name" -F '#{window_name}')}")
-      for dir in "${dirs[@]}"; do
-        local wname="${dir:t}"
-        wname="${wname#*.}"
-        if (( ! ${existing_windows[(Ie)$wname]} )); then
-          tmux new-window -t "=$name" -c "$dir" -n "$wname"
-        fi
-      done
-    fi
     tmux switch-client -t "=$name"
     return
   fi
@@ -167,7 +151,40 @@ __p_re() {
     return 1
   fi
 
+  local all=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -a|--all)
+        all=1
+        shift
+        ;;
+      -*)
+        echo "Unknown option: $1" >&2
+        return 1
+        ;;
+    esac
+  done
+
   local session=$(tmux display-message -p '#{session_name}')
+
+  if [[ "$all" -eq 1 ]]; then
+    local -a dirs=("$P"/${session}.*(/N))
+    if [[ ${#dirs[@]} -eq 0 ]]; then
+      echo "Error: no directories matching ${session}.* in \$P" >&2
+      return 1
+    fi
+    local -a existing_windows
+    existing_windows=("${(@f)$(tmux list-windows -t "=$session" -F '#{window_name}')}")
+    for dir in "${dirs[@]}"; do
+      local wname="${dir:t}"
+      wname="${wname#*.}"
+      if (( ! ${existing_windows[(Ie)$wname]} )); then
+        tmux new-window -t "=$session" -c "$dir" -n "$wname"
+      fi
+    done
+    return
+  fi
+
   local window=$(tmux display-message -p '#{window_name}')
   local target="$P/${session}.${window}"
 
@@ -348,7 +365,7 @@ p() {
       __p_open "$@"
       ;;
     re|restore)
-      __p_re
+      __p_re "$@"
       ;;
     list)
       __p_list
@@ -389,6 +406,13 @@ _p() {
   case "${words[2]}" in
     add)
       if (( CURRENT == 3 )); then
+        local -a names=()
+        local -a dirs=("$P"/*.*(/:t))
+        for d in "${dirs[@]}"; do
+          names+=("${d%%.*}")
+        done
+        local -a unames=(${(@u)names})
+        _describe 'project' unames
         return
       fi
       local prev="${words[CURRENT-1]}"
@@ -418,7 +442,10 @@ _p() {
       done
       local -a unames=(${(@u)names})
       _describe 'project' unames
-      compadd -- -r --re --restore
+      ;;
+    re|restore)
+      compadd -- -a --all
+      ;;
       ;;
     move)
       if (( CURRENT == 3 )); then
