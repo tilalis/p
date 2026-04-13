@@ -12,6 +12,7 @@ __p_help() {
   echo
   echo "  open             Open project in tmux session (sets \$PSESSION=1)"
   echo "    <name>         Project name to open"
+  echo "    -p, --postfix  Only open dirs matching postfix; session named name.postfix"
   echo
   echo "  re|restore       cd to dir matching current tmux session.window"
   echo "    -a, --all      Reopen missing windows in existing session"
@@ -107,9 +108,14 @@ __p_open() {
   fi
 
   local name=""
+  local postfix=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      -p|--postfix)
+        postfix="$2"
+        shift 2
+        ;;
       -*)
         echo "Unknown option: $1" >&2
         return 1
@@ -125,24 +131,32 @@ __p_open() {
     name=$(__p_list | fzf --tmux --prompt='Project: ') || return 0
   fi
 
-  local -a dirs=("$P"/${name}.*(/N))
+  local session_name="$name"
+  local -a dirs
+  if [[ -n "$postfix" ]]; then
+    dirs=("$P"/${name}.*.${postfix}(/N))
+    session_name="${name}-${postfix}"
+  else
+    dirs=("$P"/${name}.*(/N))
+  fi
+
   if [[ ${#dirs[@]} -eq 0 ]]; then
     echo "Error: no directories matching ${name}.* in \$P" >&2
     return 1
   fi
 
-  if tmux has-session -t "=$name" 2>/dev/null; then
-    tmux switch-client -t "=$name"
+  if tmux has-session -t "=$session_name" 2>/dev/null; then
+    tmux switch-client -t "=$session_name"
     return
   fi
 
-  tmux new-session -d -s "$name" -c "${dirs[1]}" -n "${dirs[1]#*.}" -e PSESSION=1
+  tmux new-session -d -s "$session_name" -c "${dirs[1]}" -n "${dirs[1]#*.}" -e PSESSION=1 -e PNAME="$name" -e PPOSTFIX="$postfix"
 
   for dir in "${dirs[@]:1}"; do
-    tmux new-window -t "$name" -c "$dir" -n "${dir#*.}"
+    tmux new-window -t "=$session_name" -c "$dir" -n "${dir#*.}"
   done
 
-  tmux switch-client -t "$name"
+  tmux switch-client -t "=$session_name"
 }
 
 __p_re() {
@@ -168,9 +182,16 @@ __p_re() {
   local session=$(tmux display-message -p '#{session_name}')
 
   if [[ "$all" -eq 1 ]]; then
-    local -a dirs=("$P"/${session}.*(/N))
+    local name="${PNAME:-$session}"
+    local postfix="$PPOSTFIX"
+    local -a dirs
+    if [[ -n "$postfix" ]]; then
+      dirs=("$P"/${name}.*.${postfix}(/N))
+    else
+      dirs=("$P"/${name}.*(/N))
+    fi
     if [[ ${#dirs[@]} -eq 0 ]]; then
-      echo "Error: no directories matching ${session}.* in \$P" >&2
+      echo "Error: no directories matching session in \$P" >&2
       return 1
     fi
     local -a existing_windows
@@ -185,8 +206,9 @@ __p_re() {
     return
   fi
 
+  local name="${PNAME:-$session}"
   local window=$(tmux display-message -p '#{window_name}')
-  local target="$P/${session}.${window}"
+  local target="$P/${name}.${window}"
 
   if [[ ! -d "$target" ]]; then
     echo "Error: directory $target does not exist" >&2
@@ -435,17 +457,40 @@ _p() {
       esac
       ;;
     open)
-      local -a names=()
-      local -a dirs=("$P"/*.*(/:t))
-      for d in "${dirs[@]}"; do
-        names+=("${d%%.*}")
+      local name="" has_postfix=0
+      local i
+      for (( i = 3; i < CURRENT; i++ )); do
+        case "${words[i]}" in
+          -p|--postfix) has_postfix=1 ;;
+          -*) ;;
+          *) [[ -z "$name" ]] && name="${words[i]}" ;;
+        esac
       done
-      local -a unames=(${(@u)names})
-      _describe 'project' unames
+
+      local prev="${words[CURRENT-1]}"
+      if [[ ( "$prev" = -p || "$prev" = --postfix ) && -n "$name" ]]; then
+        local -a postfixes=()
+        for d in "$P"/${name}.*(/N:t); do
+          local rest="${d#${name}.}"
+          [[ "$rest" = *.* ]] && postfixes+=("${rest#*.}")
+        done
+        compadd -- "${(@u)postfixes}"
+        return
+      fi
+
+      if [[ -z "$name" ]]; then
+        local -a names=()
+        local -a dirs=("$P"/*.*(/:t))
+        for d in "${dirs[@]}"; do
+          names+=("${d%%.*}")
+        done
+        local -a unames=(${(@u)names})
+        _describe 'project' unames
+      fi
+      (( ! has_postfix )) && compadd -- -p --postfix
       ;;
     re|restore)
       compadd -- -a --all
-      ;;
       ;;
     move)
       if (( CURRENT == 3 )); then
