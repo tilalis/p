@@ -56,6 +56,26 @@ __p_run_hook() {
   fi
 }
 
+__p_main_branch() {
+  local repo="$1"
+  local ref
+  # Prefer the remote's default branch (name-agnostic)
+  ref=$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [[ -n "$ref" ]]; then
+    echo "${ref#origin/}"
+    return 0
+  fi
+  # Fall back to common default branch names present locally
+  local candidate
+  for candidate in main master trunk; do
+    if git -C "$repo" show-ref --verify --quiet "refs/heads/$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 __p_add() {
   local name="$1"
   if [[ -z "$name" ]]; then
@@ -95,7 +115,12 @@ __p_add() {
   for repo in "${repos[@]}"; do
     local dir="$P/${name}.${repo}${postfix:+.${postfix}}"
     mkdir -p "$dir"
-    git -C "$PBASE/${repo}" worktree add --detach "$dir" main
+    local main_branch
+    main_branch=$(__p_main_branch "$PBASE/${repo}") || {
+      echo "Error: could not determine main branch for ${repo}" >&2
+      return 1
+    }
+    git -C "$PBASE/${repo}" worktree add --detach "$dir" "$main_branch"
     __p_run_hook add "$PBASE/${repo}" "$dir"
   done
 }
